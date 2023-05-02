@@ -106,6 +106,15 @@ postgres=*# select * from persons;
   7 | petr       | petrov
 (2 rows)
 
+
+До коммита в первой сессии - читаем во второй  сессии таблицу и получаем исходные две записи
+postgres=*# select * from persons;
+ id | first_name | second_name 
+----+------------+-------------
+  6 | ivan       | ivanov
+  7 | petr       | petrov
+(2 rows)
+
 После коммита в первой сессии - читаем таблицу и получаем все прошедшие инсерты из первой сессии
 postgres=*# select * from persons;
  id | first_name | second_name 
