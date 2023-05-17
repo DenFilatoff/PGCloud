@@ -37,7 +37,7 @@ This message shows that your installation appears to be working correctly.
 aster@pg11052023:~$ sudo docker network create pg-net
 a2465bd35bd6fca824897b05409453f872513a6a19ce1e553e79338b2f1277a7
 
-Ставим докер с постгресом
+запускаем контейнер с постгресом
 aster@pg11052023:~$  sudo docker run --name postgres --network pg-net \
  -e POSTGRES_PASSWORD=postgres -d -p 5432:5432 -v   \
 /var/lib/postgres:/var/lib/postgresql/data postgres:14
