@@ -1,0 +1,184 @@
+Инициализация окружения для использования аккаунта ЯО 
+yc config get folder-id  
+  yc iam service-account get cam-instance-sa --format json | jq -r '.id'
+     yc iam service-account create --name cam-instance-sa 
+     export FOLDER=$(yc config get folder-id)
+     export SA=$(yc iam service-account get cam-instance-sa --format json | jq -r '.id') 
+     echo $FOLDER
+     echo $SA
+    export ZONE=ru-central1-b
+Создание ВМ в ЯО
+    yc compute instance create --folder-id $FOLDER --name pg11052023 --description "PG_machine" --hostname pg11052023 --zone $ZONE --platform standard-v2 --create-boot-disk image-family=ubuntu-2204-lts,size=30,type=network-ssd --image-folder-id standard-images --memory 2 --cores 2 --core-fraction 5 --preemptible --network-settings type=standard --network-interface subnet-name=default-ru-central1-b,nat-ip-version=ipv4 --ssh-key ~/.ssh/id_rsa.pub --metadata serial-port-enable=1 --service-account-id $SA --async
+
+Создаем каталог в ВМ, который будет PGDATA
+mkdir /var/lib/postgres
+chmod 777  /var/lib/postgres
+
+Настраиваем докер в ВМ
+aster@pg11052023:~$ sudo apt-get update
+Добавляем реп докера
+  curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+      sudo chmod a+r /etc/apt/keyrings/docker.gpg
+      echo   "deb [arch="$(dpkg --print-architecture)" signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+  "$(. /etc/os-release && echo "$VERSION_CODENAME")" stable" |   sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+Ставим докер  
+    sudo apt-get update
+      sudo docker run hello-world
+Unable to find image 'hello-world:latest' locally
+latest: Pulling from library/hello-world
+719385e32844: Pull complete 
+Digest: sha256:fc6cf906cbfa013e80938cdf0bb199fbdbb86d6e3e013783e5a766f50f5dbce0
+Status: Downloaded newer image for hello-world:latest
+
+Hello from Docker!
+This message shows that your installation appears to be working correctly.
+
+
+aster@pg11052023:~$ sudo docker network create pg-net
+a2465bd35bd6fca824897b05409453f872513a6a19ce1e553e79338b2f1277a7
+
+Ставим докер с постгресом
+aster@pg11052023:~$  sudo docker run --name postgres --network pg-net \
+ -e POSTGRES_PASSWORD=postgres -d -p 5432:5432 -v   \
+/var/lib/postgres:/var/lib/postgresql/data postgres:14
+Unable to find image 'postgres:14' locally
+14: Pulling from library/postgres
+9e3ea8720c6d: Pull complete 
+7782b3e1be4b: Pull complete 
+247ec4ff783a: Pull complete 
+f7ead6900700: Pull complete 
+e7afdbe9a191: Pull complete 
+3ef71fe7cece: Pull complete 
+1459ebb56be5: Pull complete 
+3595124f6861: Pull complete 
+d2e2f3823594: Pull complete 
+5ae94023018c: Pull complete 
+73d5f4521f0b: Pull complete 
+21f4e2f3164b: Pull complete 
+4d02432155ab: Pull complete 
+Digest: sha256:794e11150a6d7d5a4c3d8bb60414a96eb558ab43843df5bcda3b933ddf94d742
+Status: Downloaded newer image for postgres:14
+1a6db0e819c114a3d0aeea8bb02890782a922a566d81f4165f1a2246e8e67ef3
+
+Запускаем постгрес и создаем таблицу с данными
+aster@pg11052023:~$  sudo docker run -it --rm --network pg-net --name pg-client postgres:14 psql -h postgres -U postgres
+Password for user postgres: 
+psql (14.8 (Debian 14.8-1.pgdg110+1))
+Type "help" for help.
+
+postgres=#  CREATE TABLE Products
+(
+    Id SERIAL PRIMARY KEY,
+    ProductName VARCHAR(30) NOT NULL,
+    Manufacturer VARCHAR(20) NOT NULL,
+    ProductCount INTEGER DEFAULT 0,
+    Price NUMERIC
+);
+CREATE TABLE
+postgres=# INSERT INTO Products VALUES (1, 'Galaxy S8', 'Samsung', 3, 62000);
+INSERT 0 1
+postgres=# INSERT INTO Products VALUES (1, 'Galaxy S9', 'Samsung', 4, 63000);
+ERROR:  duplicate key value violates unique constraint "products_pkey"
+DETAIL:  Key (id)=(1) already exists.
+postgres=# INSERT INTO Products VALUES (2, 'Galaxy S9', 'Samsung', 4, 63000);
+INSERT 0 1
+postgres=#  commit;
+WARNING:  there is no transaction in progress
+COMMIT
+postgres=#  select * from Products;
+ id | productname | manufacturer | productcount | price 
+----+-------------+--------------+--------------+-------
+  1 | Galaxy S8   | Samsung      |            3 | 62000
+  2 | Galaxy S9   | Samsung      |            4 | 63000
+(2 rows)
+
+postgres=# exit;
+aster@pg11052023:~$ 
+logout
+Connection to 51.250.86.58 closed.
+
+Подключаемся к постгресу в ВМ клиентом с ноутбука
+[aster@cobra ~]$  /usr/pgsql-15/src/bin/psql/psql -h 51.250.86.58 -p 5432 -U postgres postgres
+Password for user postgres: 
+psql (15.0, server 14.8 (Debian 14.8-1.pgdg110+1))
+Type "help" for help.
+
+postgres=# select * from Products;
+ id | productname | manufacturer | productcount | price 
+----+-------------+--------------+--------------+-------
+  1 | Galaxy S8   | Samsung      |            3 | 62000
+  2 | Galaxy S9   | Samsung      |            4 | 63000
+(2 rows)
+
+postgres=# exit;
+[aster@cobra ~]$ ssh aster@51.250.86.58
+Welcome to Ubuntu 22.04.2 LTS (GNU/Linux 5.15.0-71-generic x86_64)
+
+ * Documentation:  https://help.ubuntu.com
+ * Management:     https://landscape.canonical.com
+ * Support:        https://ubuntu.com/advantage
+
+  System information as of Wed May 17 12:16:18 AM UTC 2023
+
+  System load:                      0.001953125
+  Usage of /:                       31.1% of 17.63GB
+  Memory usage:                     19%
+  Swap usage:                       0%
+  Processes:                        147
+  Users logged in:                  0
+  IPv4 address for br-5cce239c4f18: 172.18.0.1
+  IPv4 address for br-a2465bd35bd6: 172.19.0.1
+  IPv4 address for docker0:         172.17.0.1
+  IPv4 address for eth0:            10.128.0.11
+
+ * Strictly confined Kubernetes makes edge and IoT secure. Learn how MicroK8s
+   just raised the bar for easy, resilient and secure K8s cluster deployment.
+
+   https://ubuntu.com/engage/secure-kubernetes-at-the-edge
+
+Expanded Security Maintenance for Applications is not enabled.
+
+1 update can be applied immediately.
+To see these additional updates run: apt list --upgradable
+
+Enable ESM Apps to receive additional future security updates.
+See https://ubuntu.com/esm or run: sudo pro status
+
+
+*** System restart required ***
+Last login: Tue May 16 23:36:56 2023 from 194.8.47.227
+
+Находим контейнер с постгресом 
+aster@pg11052023:~$ sudo docker ps -a
+CONTAINER ID   IMAGE         COMMAND                  CREATED         STATUS                     PORTS                                       NAMES
+1a6db0e819c1   postgres:14   "docker-entrypoint.s…"   6 minutes ago   Up 6 minutes               0.0.0.0:5432->5432/tcp, :::5432->5432/tcp   postgres
+4be49a47ec54   hello-world   "/hello"                 9 minutes ago   Exited (0) 9 minutes ago                                               reverent_satoshi
+
+Останавливаем и удаляем контейнер
+aster@pg11052023:~$ sudo docker stop  1a6db0e819c1
+1a6db0e819c1
+aster@pg11052023:~$  sudo docker rm 1a6db0e819c1
+1a6db0e819c1
+
+Запускаем новый контейнер с постгресом
+aster@pg11052023:~$ sudo docker run --name postgres --network pg-net  -e POSTGRES_PASSWORD=postgres -d -p 5432:5432 -v   /var/lib/postgres:/var/lib/postgresql/data postgres:14
+7e681334ca4a4795da8b8d54b879375aa6f5f4a736a1d0cdad164d90d2f9efa9
+aster@pg11052023:~$ exit
+logout
+Connection to 51.250.86.58 closed.
+
+Заново подкючаемся к постгресу в ВМ клиентом с ноутбука
+[aster@cobra ~]$  /usr/pgsql-15/src/bin/psql/psql -h 51.250.86.58 -p 5432 -U postgres postgres
+Password for user postgres: 
+psql (15.0, server 14.8 (Debian 14.8-1.pgdg110+1))
+Type "help" for help.
+
+postgres=# select * from Products;
+ id | productname | manufacturer | productcount | price 
+----+-------------+--------------+--------------+-------
+  1 | Galaxy S8   | Samsung      |            3 | 62000
+  2 | Galaxy S9   | Samsung      |            4 | 63000
+(2 rows)
+
+postgres=# 
+
