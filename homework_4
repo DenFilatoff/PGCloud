@@ -1,0 +1,341 @@
+Создание ВМ в ЯО
+yc compute instance create \
+--name pg-18052023 --description "PG_4HW" \
+--hostname pg-18052023 \
+--cores 2 \
+--memory 2 \
+--create-boot-disk name=pg-18052023-osdisk,image-folder-id=standard-images,image-family=ubuntu-2204-lts \
+--network-interface subnet-name=default-ru-central1-b,nat-ip-version=ipv4 \
+--ssh-key /home/aster/.ssh/id_rsa.pub \
+--async
+
+Настройка ключа 
+   mkdir .ssh
+   cd .ssh
+   vi authorized_keys
+   cd ..
+   chmod 700 ~/.ssh
+   chmod 600 ~/.ssh/authorized_keys
+
+
+
+
+Last login: Thu May 18 13:05:07 2023 from 213.87.138.81
+aster@pg-18052023:~$  sudo apt-get install postgresql-15
+[sudo] password for aster: 
+Reading package lists... Done
+Building dependency tree... Done
+Reading state information... Done
+postgresql-15 is already the newest version (15.3-1.pgdg22.04+1).
+The following packages were automatically installed and are no longer required:
+  libflashrom1 libftdi1-2
+Use 'sudo apt autoremove' to remove them.
+0 upgraded, 0 newly installed, 0 to remove and 4 not upgraded.
+aster@pg-18052023:~$ sudo pg_lsclusters
+Ver Cluster Port Status Owner    Data directory              Log file
+15  main    5432 online postgres /var/lib/postgresql/15/main /var/log/postgresql/postgresql-15-main.log
+aster@pg-18052023:~$ sudo su  - postgres
+postgres@pg-18052023:~$ psql
+psql (15.3 (Ubuntu 15.3-1.pgdg22.04+1))
+Type "help" for help.
+
+SELECT name, setting FROM pg_settings  where name  in 
+(
+'max_connections' ,
+'shared_buffers' ,
+'effective_cache_size' ,
+'maintenance_work_mem' ,
+'checkpoint_completion_target' , 
+'wal_buffers' ,
+'default_statistics_target' ,
+'random_page_cost' ,
+'effective_io_concurrency' ,
+'work_mem' ,
+'min_wal_size' ,
+'max_wal_size') ;
+            name             | setting 
+------------------------------+---------
+ checkpoint_completion_target | 0.9
+ default_statistics_target    | 100
+ effective_cache_size         | 524288
+ effective_io_concurrency     | 1
+ maintenance_work_mem         | 65536
+ max_connections              | 100
+ max_wal_size                 | 1024
+ min_wal_size                 | 80
+ random_page_cost             | 4
+ shared_buffers               | 16384
+ wal_buffers                  | 512
+ work_mem                     | 4096
+(12 rows)
+
+Создаем тестовую БД и инициализируем pgbench
+postgres=# CREATE DATABASE example;
+CREATE DATABASE
+
+postgres@pg-18052023:~$  pgbench -i -s 50 example
+dropping old tables...
+NOTICE:  table "pgbench_accounts" does not exist, skipping
+NOTICE:  table "pgbench_branches" does not exist, skipping
+NOTICE:  table "pgbench_history" does not exist, skipping
+NOTICE:  table "pgbench_tellers" does not exist, skipping
+creating tables...
+generating data (client-side)...
+5000000 of 5000000 tuples (100%) done (elapsed 39.70 s, remaining 0.00 s)
+vacuuming...
+creating primary keys...
+done in 111.80 s (drop tables 0.00 s, create tables 0.01 s, client-side generate 39.91 s, vacuum 29.75 s, primary keys 42.13 s).
+postgres@pg-18052023:~$ pgbench -c 10 -j 2 -t 10000 example
+pgbench (15.3 (Ubuntu 15.3-1.pgdg22.04+1))
+starting vacuum...end.
+transaction type: <builtin: TPC-B (sort of)>
+scaling factor: 50
+query mode: simple
+number of clients: 10
+number of threads: 2
+maximum number of tries: 1
+number of transactions per client: 10000
+number of transactions actually processed: 100000/100000
+number of failed transactions: 0 (0.000%)
+latency average = 30.554 ms
+initial connection time = 11.499 ms
+tps = 327.292016 (without initial connection time)
+postgres@pg-18052023:~$ psql
+psql (15.3 (Ubuntu 15.3-1.pgdg22.04+1))
+Type "help" for help.
+
+меняем параметры предлагаемые pgtune'ом
+postgres=# ALTER SYSTEM SET
+ max_connections = '100';
+ALTER SYSTEM SET
+ shared_buffers = '256MB';
+ALTER SYSTEM SET
+ effective_cache_size = '768MB';
+ALTER SYSTEM SET
+ maintenance_work_mem = '64MB';
+ALTER SYSTEM SET
+ checkpoint_completion_target = '0.9';
+ALTER SYSTEM SET
+ wal_buffers = '7864kB';
+ALTER SYSTEM SET
+ default_statistics_target = '100';
+ALTER SYSTEM SET
+ random_page_cost = '1.1';
+ALTER SYSTEM SET
+ effective_io_concurrency = '200';
+ALTER SYSTEM SET
+ work_mem = '1310kB';
+ALTER SYSTEM SET
+ min_wal_size = '1GB';
+ALTER SYSTEM SET
+ max_wal_size = '4GB';
+ALTER SYSTEM
+ALTER SYSTEM
+ALTER SYSTEM
+ALTER SYSTEM
+ALTER SYSTEM
+ALTER SYSTEM
+ALTER SYSTEM
+ALTER SYSTEM
+ALTER SYSTEM
+ALTER SYSTEM
+ALTER SYSTEM
+ALTER SYSTEM
+postgres=# \q
+
+postgres=#  SELECT pg_reload_conf();
+ pg_reload_conf 
+----------------
+ t
+(1 row)
+
+postgres@pg-18052023:~$ pgbench -c 10 -j 2 -t 10000 example
+pgbench (15.3 (Ubuntu 15.3-1.pgdg22.04+1))
+starting vacuum...end.
+transaction type: <builtin: TPC-B (sort of)>
+scaling factor: 50
+query mode: simple
+number of clients: 10
+number of threads: 2
+maximum number of tries: 1
+number of transactions per client: 10000
+number of transactions actually processed: 100000/100000
+number of failed transactions: 0 (0.000%)
+latency average = 30.703 ms
+initial connection time = 11.236 ms
+tps = 325.701949 (without initial connection time)
+
+postgres@pg-18052023:~$ psql
+psql (15.3 (Ubuntu 15.3-1.pgdg22.04+1))
+Type "help" for help.
+
+
+
+Подкручиваем автовакуум 
+postgres=# alter system set autovacuum_analyze_threshold = 500;
+alter system set autovacuum_vacuum_threshold = 500;
+ALTER SYSTEM
+ALTER SYSTEM
+postgres=# SELECT pg_reload_conf();
+ pg_reload_conf 
+----------------
+ t
+(1 row)
+
+postgres=# \q
+
+
+postgres@pg-18052023:~$ pgbench -c 10 -j 2 -t 10000 example
+pgbench (15.3 (Ubuntu 15.3-1.pgdg22.04+1))
+starting vacuum...end.
+transaction type: <builtin: TPC-B (sort of)>
+scaling factor: 50
+query mode: simple
+number of clients: 10
+number of threads: 2
+maximum number of tries: 1
+number of transactions per client: 10000
+number of transactions actually processed: 100000/100000
+number of failed transactions: 0 (0.000%)
+latency average = 29.663 ms
+initial connection time = 11.945 ms
+tps = 337.122563 (without initial connection time)
+
+
+меняем synchronous_commit, возрастет перфоманс, но теряется вероятность целостности транзакций
+postgres=# ALTER SYSTEM SET synchronous_commit=OFF;
+ALTER SYSTEM
+postgres=#  SELECT pg_reload_conf();
+ pg_reload_conf 
+----------------
+ t
+(1 row)
+
+postgres@pg-18052023:~$ pgbench -c 10 -j 2 -t 10000 example
+pgbench (15.3 (Ubuntu 15.3-1.pgdg22.04+1))
+starting vacuum...end.
+transaction type: <builtin: TPC-B (sort of)>
+scaling factor: 50
+query mode: simple
+number of clients: 10
+number of threads: 2
+maximum number of tries: 1
+number of transactions per client: 10000
+number of transactions actually processed: 100000/100000
+number of failed transactions: 0 (0.000%)
+latency average = 24.775 ms
+initial connection time = 16.672 ms
+tps = 403.639995 (without initial connection time)
+
+Настраиваем использование больших страниц
+postgres@pg-18052023:~$ cat /proc/meminfo | grep -i huge
+AnonHugePages:         0 kB
+ShmemHugePages:        0 kB
+FileHugePages:         0 kB
+HugePages_Total:       0
+HugePages_Free:        0
+HugePages_Rsvd:        0
+HugePages_Surp:        0
+Hugepagesize:       2048 kB
+Hugetlb:               0 kB
+
+aster@pg-18052023:~$ sudo head -1 /var/lib/postgresql/15/main/postmaster.pid
+73888
+aster@pg-18052023:~$ export pid=73888
+...
+aster@pg-18052023:~$ grep ^Hugepagesize /proc/meminfo | awk '{ print $2 }'
+2048
+aster@pg-18052023:~$ grep ^VmPeak /proc/$pid/status | awk '{ print $2 }'
+219344
+
+aster@pg-18052023:~$ python3
+Python 3.10.6 (main, Mar 10 2023, 10:55:28) [GCC 11.3.0] on linux
+Type "help", "copyright", "credits" or "license" for more information.
+>>> 219344/2048
+107.1015625
+>>> 
+KeyboardInterrupt
+>>> 
+KeyboardInterrupt
+>>> 
+aster@pg-18052023:~$ sudo sysctl -w vm.nr_hugepages=107
+vm.nr_hugepages = 107
+aster@pg-18052023:~$ sudo cat /proc/meminfo | grep -i huge
+AnonHugePages:         0 kB
+ShmemHugePages:        0 kB
+FileHugePages:         0 kB
+HugePages_Total:       4
+HugePages_Free:        4
+HugePages_Rsvd:        0
+HugePages_Surp:        0
+Hugepagesize:       2048 kB
+Hugetlb:            8192 kB
+aster@pg-18052023:~$ sudo sysctl -p
+aster@pg-18052023:~$ sudo cat /proc/meminfo | grep -i huge
+AnonHugePages:         0 kB
+ShmemHugePages:        0 kB
+FileHugePages:         0 kB
+HugePages_Total:       4
+HugePages_Free:        4
+HugePages_Rsvd:        0
+HugePages_Surp:        0
+Hugepagesize:       2048 kB
+Hugetlb:            8192 kB
+
+aster@pg-18052023:~$ sudo cat /proc/meminfo | grep -i huge
+AnonHugePages:         0 kB
+ShmemHugePages:        0 kB
+FileHugePages:         0 kB
+HugePages_Total:       7
+HugePages_Free:        7
+HugePages_Rsvd:        0
+HugePages_Surp:        0
+Hugepagesize:       2048 kB
+Hugetlb:           14336 kB
+
+aster@pg-18052023:~$ sudo cat /proc/meminfo | grep -i huge
+AnonHugePages:         0 kB
+ShmemHugePages:        0 kB
+FileHugePages:         0 kB
+HugePages_Total:       9
+HugePages_Free:        9
+HugePages_Rsvd:        0
+HugePages_Surp:        0
+Hugepagesize:       2048 kB
+Hugetlb:           18432 kB
+aster@pg-18052023:~$ sudo cat /proc/meminfo | grep -i huge
+AnonHugePages:         0 kB
+ShmemHugePages:        0 kB
+FileHugePages:         0 kB
+HugePages_Total:       9
+HugePages_Free:        9
+HugePages_Rsvd:        0
+HugePages_Surp:        0
+Hugepagesize:       2048 kB
+Hugetlb:           18432 kB
+aster@pg-18052023:~$ sudo su  - postgres
+
+
+
+postgres@pg-18052023:~$ pgbench -c 10 -j 2 -t 10000 example
+pgbench (15.3 (Ubuntu 15.3-1.pgdg22.04+1))
+starting vacuum...end.
+transaction type: <builtin: TPC-B (sort of)>
+scaling factor: 50
+query mode: simple
+number of clients: 10
+number of threads: 2
+maximum number of tries: 1
+number of transactions per client: 10000
+number of transactions actually processed: 100000/100000
+number of failed transactions: 0 (0.000%)
+latency average = 24.368 ms
+initial connection time = 13.996 ms
+tps = 410.376867 (without initial connection time)
+
+
+В данном случае прирост от ввода больших страниц на 3 транзакции, однако на highload-системах эффект будет заметнее 
+
+итоговое максимально полученное значение tps = 410.376867 с дефолтного tps = 327.292016
+
+
