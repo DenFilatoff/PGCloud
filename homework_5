@@ -1,0 +1,431 @@
+Создаем две машины 
+yc compute instance create \
+--name pg-51 --description "PG_51" \
+--hostname pg-51 \
+--cores 2 \
+--memory 2 \
+--create-boot-disk name=pg-51-osdisk,image-folder-id=standard-images,image-family=ubuntu-2204-lts \
+--network-interface subnet-name=default-ru-central1-a,nat-ip-version=ipv4 \
+--ssh-key /home/aster/.ssh/id_rsa.pub \
+--async
+
+yc compute instance create \
+--name pg-52 --description "PG_52" \
+--hostname pg-52 \
+--cores 2 \
+--memory 2 \
+--create-boot-disk name=pg-52-osdisk,image-folder-id=standard-images,image-family=ubuntu-2204-lts \
+--network-interface subnet-name=default-ru-central1-a,nat-ip-version=ipv4 \
+--ssh-key /home/aster/.ssh/id_rsa.pub \
+--async
+
+на pg-51 будет прайм, на pg-52 - физический стендбай
+ 
+на обоих обновляем пакеты 
+sudo apt-get update
+
+Ставим пострге по дефолту из доступной (14) на обе машины
+
+
+aster@pg-51:~$ pg_lsclusters
+Ver Cluster Port Status Owner    Data directory              Log file
+14  main    5432 online postgres /var/lib/postgresql/14/main /var/log/postgresql/postgresql-14-main.log
+
+
+aster@pg-52:~$ pg_lsclusters
+Ver Cluster Port Status Owner    Data directory              Log file
+14  main    5432 online postgres /var/lib/postgresql/14/main /var/log/postgresql/postgresql-14-main.log
+
+Добавляем также на две машины реп от постгреспро
+aster@pg-51:~$ sudo sh -c 'echo "deb [arch=amd64] https://repo.postgrespro.ru/pg_probackup/deb/ $(lsb_release -cs) main-$(lsb_release -cs)" > /etc/apt/sources.list.d/pg_probackup.list' && sudo wget -O - https://repo.postgrespro.ru/pg_probackup/keys/GPG-KEY-PG_PROBACKUP | sudo apt-key add - && sudo apt-get update
+
+aster@pg-52:~$ sudo sh -c 'echo "deb [arch=amd64] https://repo.postgrespro.ru/pg_probackup/deb/ $(lsb_release -cs) main-$(lsb_release -cs)" > /etc/apt/sources.list.d/pg_probackup.list' && sudo wget -O - https://repo.postgrespro.ru/pg_probackup/keys/GPG-KEY-PG_PROBACKUP | sudo apt-key add - && sudo apt-get update
+
+
+
+Ставим на обоих машинах пробэкап
+
+aster@pg-51:~$ sudo apt install pg-probackup-14 pg-probackup-14-dbg postgresql-contrib postgresql-14-pg-checksums -y
+
+aster@pg-52:~$ sudo apt install pg-probackup-14 pg-probackup-14-dbg postgresql-contrib postgresql-14-pg-checksums -y
+
+
+в хом-директориях создаем окружение
+postgres@pg-52:~$ cat .pgpass
+pg-51:5432:replication:backup:123456
+pg-51:5432:testdb:backup:123456
+postgres@pg-52:~$ cat .bash_profile
+BACKUP_PATH=/home/backups
+export BACKUP_PATH
+alias pg_probackup='pg_probackup-14'
+
+
+на прайме создаем роль с грантами
+postgres@pg-51:~$ psql
+psql (14.8 (Ubuntu 14.8-0ubuntu0.22.04.1))
+Type "help" for help.
+
+postgres=# create user backup;
+CREATE ROLE
+postgres=# ALTER ROLE backup NOSUPERUSER;
+ALTER ROLE
+postgres=# ALTER ROLE backup WITH REPLICATION;
+GRANT USAGE ON SCHEMA pg_catalog TO backup;
+GRANT EXECUTE ON FUNCTION pg_catalog.current_setting(text) TO backup;
+GRANT EXECUTE ON FUNCTION pg_catalog.pg_is_in_recovery() TO backup;
+GRANT EXECUTE ON FUNCTION pg_catalog.pg_start_backup(text, boolean, boolean) TO backup;
+GRANT EXECUTE ON FUNCTION pg_catalog.pg_stop_backup(boolean, boolean) TO backup;
+GRANT EXECUTE ON FUNCTION pg_catalog.pg_create_restore_point(text) TO backup;
+GRANT EXECUTE ON FUNCTION pg_catalog.pg_switch_wal() TO backup;
+
+GRANT EXECUTE ON FUNCTION pg_catalog.pg_last_wal_replay_lsn() TO backup;
+GRANT EXECUTE ON FUNCTION pg_catalog.txid_current() TO backup;
+GRANT EXECUTE ON FUNCTION pg_catalog.txid_current_snapshot() TO backup;
+GRANT EXECUTE ON FUNCTION pg_catalog.txid_snapshot_xmax(txid_snapshot) TO backup;
+GRANT EXECUTE ON FUNCTION pg_catalog.pg_control_checkpoint() TO backup;
+ALTER ROLE
+GRANT
+GRANT
+GRANT
+GRANT
+GRANT
+GRANT
+GRANT
+GRANT
+GRANT
+GRANT
+GRANT
+GRANT
+postgres=# 
+postgres=# ALTER ROLE backup WITH REPLICATION;
+ALTER ROLE
+
+
+правим hba файл на обоих серверах
+
+postgres@pg-51:~$ tail -100  /etc/postgresql/14/main/pg_hba.conf
+добавляем
+host    testdb   backup         0.0.0.0/0         trust 
+host    replication  backup          0.0.0.0/0      trust   
+host    testdb  postgres   0.0.0.0/0         trust
+host    replication   postgres   0.0.0.0/0         trust
+
+
+postgres@pg-52:~$ tail -100  /etc/postgresql/14/main/pg_hba.conf
+добавляем
+host    testdb   backup         0.0.0.0/0         trust 
+host    replication  backup          0.0.0.0/0      trust   
+host    testdb  postgres   0.0.0.0/0         trust
+host    replication   postgres   0.0.0.0/0         trust
+
+
+
+
+
+
+на прайме и стендбае создаем бэкап-каталог
+aster@pg-51:~$ sudo mkdir /home/backups ; sudo chown -R postgres:postgres /home/backups
+
+инициализируем репозитарий пробэкапа
+postgres@pg-52:~$ pg_probackup init
+INFO: Backup catalog '/home/backups' successfully initialized
+
+
+Выполняем бэкап удаленного pg-51  на pg-52
+postgres@pg-52:~$ pg_probackup backup --instance=main -j2 --backup-mode=FULL --compress --stream --delete-expired --pguser=backup --pgdatabase=testdb --remote-host=pg-51 --remote-user=postgres
+INFO: Backup start, pg_probackup version: 2.5.12, instance: main, backup ID: RVGPUV, backup mode: FULL, wal mode: STREAM, remote: true, compress-algorithm: zlib, compress-level: 1
+WARNING: This PostgreSQL instance was initialized without data block checksums. pg_probackup have no way to detect data block corruption without them. Reinitialize PGDATA with option '--data-checksums'.
+INFO: Database backup start
+INFO: wait for pg_start_backup()
+INFO: Wait for WAL segment /home/backups/backups/main/RVGPUV/database/pg_wal/000000010000000000000002 to be streamed
+INFO: PGDATA size: 33MB
+INFO: Current Start LSN: 0/2000028, TLI: 1
+INFO: Start transferring data files
+INFO: Data files are transferred, time elapsed: 10s
+INFO: wait for pg_stop_backup()
+INFO: pg_stop backup() successfully executed
+INFO: stop_lsn: 0/2009C90
+INFO: Getting the Recovery Time from WAL
+INFO: Syncing backup files to disk
+INFO: Backup files are synced, time elapsed: 3s
+INFO: Validating backup RVGPUV
+INFO: Backup RVGPUV data files are valid
+INFO: Backup RVGPUV resident size: 27MB
+INFO: Backup RVGPUV completed
+WARNING: Retention policy is not set
+
+
+параметры в праймари
+postgres@pg-51:/home/backups/wal/main$ psql
+psql (14.8 (Ubuntu 14.8-0ubuntu0.22.04.1))
+Type "help" for help.
+
+postgres=# alter system set archive_mode = on;
+ALTER SYSTEM
+postgres=# alter system set  max_wal_senders = 10 ;  
+ALTER SYSTEM
+postgres=# alter system set  wal_level = replica ;
+ALTER SYSTEM
+postgres=# alter system set  wal_log_hints = on ;
+ALTER SYSTEM
+postgres=#  alter system set wal_level = hot_standby ;
+ALTER SYSTEM
+postgres=#  alter system set listen_addresses = '*' ;
+ALTER SYSTEM
+
+postgres@pg-51:~$ psql
+psql (14.8 (Ubuntu 14.8-0ubuntu0.22.04.1))
+Type "help" for help.
+
+postgres=# alter system set archive_command =  'scp  /home/backups/wal/main/%f  pg-52:/home/backups/wal/main/'  ;
+ALTER SYSTEM
+postgres=# \q
+
+
+
+
+
+
+postgres@pg-51:~$ psql
+psql (14.8 (Ubuntu 14.8-0ubuntu0.22.04.1))
+Type "help" for help.
+
+postgres=# alter system set archive_command =  'scp  /home/backups/wal/main/%f  pg-52:/home/backups/wal/main/'  ;
+ALTER SYSTEM
+postgres=# \q
+
+
+
+
+
+
+останавливаем кластер постгреса и удаляем все из PGDATA
+ aster@pg-52:~sudo pg_ctlcluster stop 14 main
+ aster@pg-52:~sudo cd /var/lib/postgresql/14/data; rm -rf *
+
+Восстанавливаемся локально на pg-52
+ postgres@pg-52:~pg_probackup restore -B /home/backups/ --instance main
+
+добавляем файл standby.signal
+  postgres@pg-52:~touch /var/lib/postgresql/14/main/standby.signal
+
+
+postgres@pg-51:~$ psql
+psql (14.8 (Ubuntu 14.8-0ubuntu0.22.04.1))
+Type "help" for help.
+
+postgres=# alter system set archive_command =  'scp  /home/backups/wal/main/%f  pg-52:/home/backups/wal/main/'  ;
+ALTER SYSTEM
+postgres=# \q
+
+
+
+
+Далее на slavedb в директории с данными PostgreSQL создадим файл recovery.conf с таким содержимым:
+alter system set standby_mode  = on ;
+alter system set primary_conninfo      = 'host=pg-51 port=5432 user=postgres' ;
+alter system set restore_command = 'scp pg-51:/home/backups/wal/main/%f "%p"'  ;
+alter system set standby_mode    = 'on' ;
+# Specifies a connection string which is used for the standby server to connect
+# with the primary.
+primary_conninfo      = 'host=pg-51 port=5432 user=postgres'
+
+# Specifies a trigger file whose presence should cause streaming replication to
+# end (i.e., failover).
+trigger_file = '/path_to/trigger'
+
+# Specifies a command to load archive segments from the WAL archive. If
+# wal_keep_segments is a high enough number to retain the WAL segments
+# required for the standby server, this may not be necessary. But
+# a large workload can cause segments to be recycled before the standby
+# is fully synchronized, requiring you to start again from a new base backup.
+restore_command = 'scp masterdb_host:/path_to/archive/%f "%p"'
+
+alter system set  wal_level = replica ;     
+
+
+pg_probackup backup --instance=main -j2 --backup-mode=FULL --compress --stream --delete-expired --pguser=backup --pgdatabase=testdb --remote-host=pg-51 --remote-user=postgres
+
+
+pg_probackup restore -B /home/backups/ --instance main  
+
+
+
+
+Настройка и проверка репликациии
+aster@pg-51:~$ sudo su - postgres
+[sudo] password for aster: 
+postgres@pg-51:~$ psql
+psql (14.8 (Ubuntu 14.8-0ubuntu0.22.04.1))
+Type "help" for help.
+
+postgres=# \c testdb
+You are now connected to database "testdb" as user "postgres".
+testdb=# id;
+ERROR:  syntax error at or near "id"
+LINE 1: id;
+        ^
+testdb=# CREATE TABLE phonebook(phone VARCHAR(32), firstname VARCHAR(32), lastname VARCHAR(32), address VARCHAR(64));
+CREATE TABLE
+testdb=#  \dt phonebook
+           List of relations
+ Schema |   Name    | Type  |  Owner   
+--------+-----------+-------+----------
+ public | phonebook | table | postgres
+(1 row)
+
+testdb=# \dt phonebook
+           List of relations
+ Schema |   Name    | Type  |  Owner   
+--------+-----------+-------+----------
+ public | phonebook | table | postgres
+(1 row)
+
+testdb=# \dt phonebook
+           List of relations
+ Schema |   Name    | Type  |  Owner   
+--------+-----------+-------+----------
+ public | phonebook | table | postgres
+(1 row)
+
+testdb=# 
+testdb=# 
+testdb=# INSERT INTO phonebook(phone, firstname, lastname, address) VALUES('+1 123 456 7890', 'John', 'Doe', 'North America'); (inserts data into phonebook table);
+INSERT 0 1
+ERROR:  syntax error at or near "inserts"
+LINE 1: (inserts data into phonebook table);
+         ^
+testdb=# 
+testdb=# 
+testdb=# INSERT INTO phonebook(phone, firstname, lastname, address) VALUES('+1 123 456 7890', 'John', 'Doe', 'North America'); (inserts data into phonebook table)
+INSERT 0 1
+testdb-# commit;
+ERROR:  syntax error at or near "inserts"
+LINE 1: (inserts data into phonebook table)
+         ^
+testdb=# ;
+testdb=# commit;
+WARNING:  there is no transaction in progress
+COMMIT
+testdb=# SELECT * FROM phonebook ORDER BY lastname; 
+      phone      | firstname | lastname |    address    
+-----------------+-----------+----------+---------------
+ +1 123 456 7890 | John      | Doe      | North America
+ +1 123 456 7890 | John      | Doe      | North America
+(2 rows)
+
+
+
+sudo su - postgres
+postgres@pg-52:~$ psql
+psql (14.8 (Ubuntu 14.8-0ubuntu0.22.04.1))
+Type "help" for help.
+
+postgres=# \c testdb
+You are now connected to database "testdb" as user "postgres".
+testdb=# id
+testdb-# ;
+ERROR:  syntax error at or near "id"
+LINE 1: id
+        ^
+testdb=# \dt phonebook
+Did not find any relation named "phonebook".
+testdb=#  \dt phonebook
+Did not find any relation named "phonebook".
+
+На стендбае 
+postgres@pg-52:~$ cd /var/lib/postgresql/14/main
+postgres@pg-52:~/14/main$ cat postgresql.auto.conf
+# Do not edit this file manually!
+# It will be overwritten by the ALTER SYSTEM command.
+archive_mode = 'on'
+archive_command = 'cp %p /home/backups/wal/main/%f'
+max_wal_senders = '10'
+wal_log_hints = 'on'
+wal_level = 'hot_standby'
+primary_conninfo = 'host=pg-51 port=5432 user=postgres'
+listen_addresses = '*'
+postgres@pg-52:~/14/main$ psql
+psql (14.8 (Ubuntu 14.8-0ubuntu0.22.04.1))
+
+
+добавляем restore_command
+postgres@pg-52:~$ ls -la /home/backups/wal/main/
+total 8
+drwx------ 2 postgres postgres 4096 May 29 16:02 .
+drwx------ 3 postgres postgres 4096 May 29 16:02 ..
+postgres@pg-52:~$ psql
+psql (14.8 (Ubuntu 14.8-0ubuntu0.22.04.1))
+Type "help" for help.
+
+postgres=# show restore_command;
+ restore_command 
+-----------------
+ 
+(1 row)
+postgres=# alter system set restore_command =  ' scp postgres@pg-51:/home/backups/wal/main/%f "%p"' ;
+ALTER SYSTEM
+postgres=# select pg_reload_conf();
+ pg_reload_conf 
+----------------
+ t
+(1 row)
+
+postgres=# show restore_command;
+                  restore_command                   
+----------------------------------------------------
+  scp postgres@pg-51:/home/backups/wal/main/%f "%p"
+(1 row)
+
+Перезапускаем экемпляр 
+postgres@pg-52:~$ psql
+psql (14.8 (Ubuntu 14.8-0ubuntu0.22.04.1))
+Type "help" for help.
+
+postgres=# \testdb
+invalid command \testdb
+Try \? for help.
+postgres=# \c testdb
+You are now connected to database "testdb" as user "postgres".
+testdb=# \dt
+           List of relations
+ Schema |   Name    | Type  |  Owner   
+--------+-----------+-------+----------
+ public | phonebook | table | postgres
+(1 row)
+
+testdb=# select * from phonebook;
+      phone      | firstname | lastname |    address    
+-----------------+-----------+----------+---------------
+ +1 123 456 7890 | John      | Doe      | North America
+ +1 123 456 7890 | John      | Doe      | North America
+(2 rows)
+
+testdb=# packet_write_wait: Connection to 158.160.109.139 port 22: Broken pipe
+
+Записи подтянулись, репликация работает
+
+aster@pg-51:~$ sudo su - postgres
+postgres@pg-51:~$ psql -x -c "select * from pg_stat_replication"
+-[ RECORD 1 ]----+------------------------------
+pid              | 21041
+usesysid         | 10
+usename          | postgres
+application_name | 14/main
+client_addr      | 10.128.0.6
+client_hostname  | 
+client_port      | 33942
+backend_start    | 2023-05-30 10:18:29.561339+00
+backend_xmin     | 
+state            | streaming
+sent_lsn         | 0/80000D8
+write_lsn        | 0/80000D8
+flush_lsn        | 0/80000D8
+replay_lsn       | 0/80000D8
+write_lag        | 
+flush_lag        | 
+replay_lag       | 
+sync_priority    | 0
+sync_state       | async
+reply_time       | 2023-05-30 10:22:02.369833+00
+
