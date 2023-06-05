@@ -928,6 +928,62 @@ postgres=# select pg_is_in_recovery();
 postgres=# 
 
 
+
+Проверка кластера 
+aster@ptr3:~$ sudo su - postgres
+[sudo] password for aster: 
+Sorry, try again.
+[sudo] password for aster: 
+postgres@ptr3:~$ psql
+psql (14.8 (Ubuntu 14.8-0ubuntu0.22.04.1))
+Type "help" for help.
+
+postgres=# 
+
+CREATE TABLE employee (
+    emp_id      INT PRIMARY KEY,
+    first_name VARCHAR(50) NOT NULL,
+    last_name VARCHAR(50) NOT NULL,
+    gender CHAR(1),
+    birthdate DATE,
+    email VARCHAR(100) UNIQUE,
+    salary INT
+);
+
+CREATE TABLE
+postgres=# 
+
+INSERT INTO employee
+VALUES(1,'Annie','Smith','F', DATE '1988-01-09', 'ani@email.com',5000);
+
+INSERT 0 1
+postgres=# commit;
+WARNING:  there is no transaction in progress
+COMMIT
+postgres=# select * from employee;
+ emp_id | first_name | last_name | gender | birthdate  |     email     | salary 
+--------+------------+-----------+--------+------------+---------------+--------
+      1 | Annie      | Smith     | F      | 1988-01-09 | ani@email.com |   5000
+(1 row)
+
+postgres=# 
+
+
+aster@ptr2:~$ sudo su - postgres
+[sudo] password for aster: 
+postgres@ptr2:~$ psql
+psql (14.8 (Ubuntu 14.8-0ubuntu0.22.04.1))
+Type "help" for help.
+
+postgres=# select * from employee;
+ emp_id | first_name | last_name | gender | birthdate  |     email     | salary 
+--------+------------+-----------+--------+------------+---------------+--------
+      1 | Annie      | Smith     | F      | 1988-01-09 | ani@email.com |   5000
+(1 row)
+
+
+
+
 Бэкап 
 aster@ptr3:~$ sudo su - postgres
 postgres@ptr3:~$ pg_basebackup -h localhost -p 5432 -U postgres -D /backup -Ft -z -Xs -P
@@ -942,6 +998,10 @@ drwxr-xr-x 20 root     root        4096 Jun  5 11:42 ..
 -rw-------  1 postgres postgres   18347 Jun  5 11:44 pg_wal.tar.gz
 postgres@ptr3:~$ packet_write_wait: Connection to 158.160.38.146 port 22: Broken pipe
 [aster@cobra ~]$ 
+
+
+
+
 
 к сожалению не удалось забэкапить с помощью wal-g
 ни с MinIO 
