@@ -1,1 +1,380 @@
+Создание ВМ для кластера etcd
 
+
+yc compute instance create --name etcd1 --description "etcd1" --hostname etcd1 --cores 2 --memory 2  \
+--create-boot-disk name=etcd1-osdisk,image-folder-id=standard-images,image-family=ubuntu-2204-lts \ 
+--network-interface subnet-name=default-ru-central1-a,nat-ip-version=ipv4 --ssh-key /home/aster/.ssh/id_rsa.pub --async
+
+yc compute instance create --name etcd2 --description "etcd2" --hostname etcd2 --cores 2 --memory 2  \
+--create-boot-disk name=etcd2-osdisk,image-folder-id=standard-images,image-family=ubuntu-2204-lts \ 
+--network-interface subnet-name=default-ru-central1-a,nat-ip-version=ipv4 --ssh-key /home/aster/.ssh/id_rsa.pub --async
+
+yc compute instance create --name etcd3 --description "etcd3" --hostname etcd3 --cores 2 --memory 2  \
+--create-boot-disk name=etcd3-osdisk,image-folder-id=standard-images,image-family=ubuntu-2204-lts \ 
+--network-interface subnet-name=default-ru-central1-a,nat-ip-version=ipv4 --ssh-key /home/aster/.ssh/id_rsa.pub --async
+
+Создание конфигов для сервиса etcd
+
+
+sudo vi /etc/etcd
+
+---- etcd1 --- 
+ETCD_NAME=etcd1
+ETCD_DATA_DIR=/var/lib/etcd
+ETCD_LISTEN_CLIENT_URLS=http://10.128.0.4:2379,http://127.0.0.1:2379
+ETCD_LISTEN_PEER_URLS=http://10.128.0.4:2380
+ETCD_ADVERTISE_CLIENT_URLS=http://10.128.0.4:2379
+ETCD_INITIAL_ADVERTISE_PEER_URLS=http://10.128.0.4:2380
+ETCD_INITIAL_CLUSTER=etcd1=http://10.128.0.4:2380,etcd2=http://10.128.0.9:2380,etcd3=http://10.128.0.33:2380
+ETCD_INITIAL_CLUSTER_STATE=new
+ETCD_INITIAL_CLUSTER_TOKEN=etcd-cluster
+
+
+---- etcd2 --- 
+ETCD_NAME=etcd2
+ETCD_DATA_DIR=/var/lib/etcd
+ETCD_LISTEN_CLIENT_URLS=http://10.128.0.9:2379,http://127.0.0.1:2379
+ETCD_LISTEN_PEER_URLS=http://10.128.0.9:2380
+ETCD_ADVERTISE_CLIENT_URLS=http://10.128.0.9:2379
+ETCD_INITIAL_ADVERTISE_PEER_URLS=http://10.128.0.9:2380
+ETCD_INITIAL_CLUSTER=etcd1=http://10.128.0.4:2380,etcd2=http://10.128.0.9:2380,etcd3=http://10.128.0.33:2380
+ETCD_INITIAL_CLUSTER_STATE=new
+ETCD_INITIAL_CLUSTER_TOKEN=etcd-cluster
+
+
+---- etcd3 ---  
+ETCD_NAME=etcd3
+ETCD_DATA_DIR=/var/lib/etcd
+ETCD_LISTEN_CLIENT_URLS=http://10.128.0.33:2379,http://127.0.0.1:2379
+ETCD_LISTEN_PEER_URLS=http://10.128.0.33:2380
+ETCD_ADVERTISE_CLIENT_URLS=http://10.128.0.33:2379
+ETCD_INITIAL_ADVERTISE_PEER_URLS=http://10.128.0.33:2380
+ETCD_INITIAL_CLUSTER=etcd1=http://10.128.0.4:2380,etcd2=http://10.128.0.9:2380,etcd3=http://10.128.0.33:2380
+ETCD_INITIAL_CLUSTER_STATE=new
+ETCD_INITIAL_CLUSTER_TOKEN=etcd-cluster
+
+
+sudo vi  /etc/systemd/system/etcd.service на всех трех машинах 
+[Unit]
+Description=etcd
+
+[Service]
+Type=notify
+EnvironmentFile=/etc/etcd
+ExecStart=/usr/bin/etcd
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+
+на всех трех машинах 
+ sudo systemctl daemon-reload
+sudo systemctl enable etcd
+
+проверяем кластер 
+aster@etcd1:~$ etcdctl --endpoints=http://10.128.0.4:2379 member list
+c05ea879249be23: name=etcd3 peerURLs=http://10.128.0.33:2380 clientURLs=http://10.128.0.33:2379 isLeader=false
+5054b81f7871e644: name=etcd1 peerURLs=http://10.128.0.4:2380 clientURLs=http://10.128.0.4:2379 isLeader=true
+5adbc21285960847: name=etcd2 peerURLs=http://10.128.0.9:2380 clientURLs=http://10.128.0.9:2379 isLeader=false
+
+
+Создаем три машины для постгреса 
+
+
+yc compute instance create --name ptr1 --description "ptr1" --hostname etcd1 --cores 2 --memory 2  \
+--create-boot-disk name=ptr1-osdisk,image-folder-id=standard-images,image-family=ubuntu-2204-lts \ 
+--network-interface subnet-name=default-ru-central1-a,nat-ip-version=ipv4 --ssh-key /home/aster/.ssh/id_rsa.pub --async
+
+yc compute instance create --name ptr2 --description "ptr2" --hostname etcd2 --cores 2 --memory 2  \
+--create-boot-disk name=ptr2-osdisk,image-folder-id=standard-images,image-family=ubuntu-2204-lts \ 
+--network-interface subnet-name=default-ru-central1-a,nat-ip-version=ipv4 --ssh-key /home/aster/.ssh/id_rsa.pub --async
+
+yc compute instance create --name ptr3 --description "ptr3" --hostname ptr3 --cores 2 --memory 2  \
+--create-boot-disk name=etcd3-osdisk,image-folder-id=standard-images,image-family=ubuntu-2204-lts \ 
+--network-interface subnet-name=default-ru-central1-a,nat-ip-version=ipv4 --ssh-key /home/aster/.ssh/id_rsa.pub --async
+
+на всех трех машмнах 
+собственно постгрес (14)
+sudo apt install postgresql
+
+Питон
+sudo apt install python3-pip
+ Патрони
+ sudo apt-get install patroni
+  pip3 install psycopg2-binary
+  
+конфиги патрони
+
+  =====   /etc/patroni/config.yml  на ptr1 =========================================
+
+
+scope: pg_cluster
+namespace: /service/
+name: ptr1
+
+restapi:
+    listen: 10.128.0.22:8008
+    connect_address: 10.128.0.22:8008
+
+etcd:
+    hosts: 10.128.0.4:2379,10.128.0.9:2379,10.128.0.33:2379
+
+bootstrap:
+  dcs:
+    ttl: 30
+    loop_wait: 10
+    retry_timeout: 10
+    maximum_lag_on_failover: 1048576
+    postgresql:
+      use_pg_rewind: true
+      use_slots: true
+      parameters:
+        wal_level: replica
+        hot_standby: "on"
+        wal_keep_segments: 5120
+        max_wal_senders: 5
+        max_replication_slots: 5
+        checkpoint_timeout: 30
+        max_connections: 100
+  initdb:
+  - encoding: UTF8
+  - locale: ru_RU.UTF-8
+  - data-checksums
+
+  pg_hba:
+  - host replication replicator 127.0.0.1/32 trust
+  - host replication replicator 10.128.0.22/0 trust
+  - host replication replicator 10.128.0.18/0 trust
+  - host replication replicator 10.128.0.12/0 trust
+  - host all all 0.0.0.0/0 md5
+
+  users:
+    admin:
+      password: admin
+      options:
+        - createrole
+        - createdb
+
+postgresql:
+  listen: 10.128.0.22:5432
+  connect_address: 10.128.0.22:5432
+  data_dir: /var/lib/postgresql/14/main
+  bin_dir: /usr/lib/postgresql/14/bin
+  pgpass: /tmp/pgpass
+  authentication:
+    replication:
+      username: replicator
+      password: replicator
+    superuser:
+      username: postgres
+      password: postgres
+
+tags:
+    nofailover: false
+    noloadbalance: false
+    clonefrom: false
+    nosync: false
+
+ ==================== /etc/patroni/config.yml  на ptr2  ======================================
+
+
+scope: pg_cluster
+namespace: /service/
+name: ptr2
+
+restapi:
+    listen: 10.128.0.18:8008
+    connect_address: 10.128.0.18:8008
+
+etcd:
+    hosts: 10.128.0.4:2379,10.128.0.9:2379,10.128.0.33:2379
+
+bootstrap:
+  dcs:
+    ttl: 30
+    loop_wait: 10
+    retry_timeout: 10
+    maximum_lag_on_failover: 1048576
+    postgresql:
+      use_pg_rewind: true
+      use_slots: true
+      parameters:
+        wal_level: replica
+        hot_standby: "on"
+        wal_keep_segments: 5120
+        max_wal_senders: 5
+        max_replication_slots: 5
+        checkpoint_timeout: 30
+        max_connections: 100
+  initdb:
+  - encoding: UTF8
+  - locale: ru_RU.UTF-8
+  - data-checksums
+
+  pg_hba:
+  - host replication replicator 127.0.0.1/32 trust
+  - host replication replicator 10.128.0.22/0 trust
+  - host replication replicator 10.128.0.18/0 trust
+  - host replication replicator 10.128.0.12/0 trust
+  - host all all 0.0.0.0/0 md5
+
+  users:
+    admin:
+      password: admin
+      options:
+        - createrole
+        - createdb
+
+postgresql:
+  listen: 10.128.0.18:5432
+  connect_address: 10.128.0.18:5432
+  data_dir: /var/lib/postgresql/14/main
+  bin_dir: /usr/lib/postgresql/14/bin
+  pgpass: /tmp/pgpass
+  authentication:
+    replication:
+      username: replicator
+      password: replicator
+    superuser:
+      username: postgres
+      password: postgres
+
+tags:
+    nofailover: false
+    noloadbalance: false
+    clonefrom: false
+    nosync: false
+
+
+====================== /etc/patroni/config.yml  на ptr3  ================================
+
+
+
+
+scope: pg_cluster
+namespace: /service/
+name: ptr2
+
+restapi:
+    listen: 10.128.0.12:8008
+    connect_address: 10.128.0.12:8008
+
+etcd:
+    hosts: 10.128.0.4:2379,10.128.0.9:2379,10.128.0.33:2379
+
+bootstrap:
+  dcs:
+    ttl: 30
+    loop_wait: 10
+    retry_timeout: 10
+    maximum_lag_on_failover: 1048576
+    postgresql:
+      use_pg_rewind: true
+      use_slots: true
+      parameters:
+        wal_level: replica
+        hot_standby: "on"
+        wal_keep_segments: 5120
+        max_wal_senders: 5
+        max_replication_slots: 5
+        checkpoint_timeout: 30
+        max_connections: 100
+  initdb:
+  - encoding: UTF8
+  - locale: ru_RU.UTF-8
+  - data-checksums
+
+  pg_hba:
+  - host replication replicator 127.0.0.1/32 trust
+  - host replication replicator 10.128.0.22/0 trust
+  - host replication replicator 10.128.0.18/0 trust
+  - host replication replicator 10.128.0.12/0 trust
+  - host all all 0.0.0.0/0 md5
+
+  users:
+    admin:
+      password: admin
+      options:
+        - createrole
+        - createdb
+
+postgresql:
+  listen: 10.128.0.12:5432
+  connect_address: 10.128.0.12:5432
+  data_dir: /var/lib/postgresql/14/main
+  bin_dir: /usr/lib/postgresql/14/bin
+  pgpass: /tmp/pgpass
+  authentication:
+    replication:
+      username: replicator
+      password: replicator
+    superuser:
+      username: postgres
+      password: postgres
+
+tags:
+    nofailover: false
+    noloadbalance: false
+    clonefrom: false
+    nosync: false
+
+сервисы патрони на трех ptr 
+
+# cat /etc/systemd/system/patroni.service
+[Unit]
+Description=Runners to orchestrate a high-availability PostgreSQL
+After=syslog.target network.target
+[Service]
+Type=simple
+User=postgres
+Group=postgres
+ExecStart=/usr/bin/patroni /etc/patroni/config.yml
+ExecReload=/bin/kill -s HUP $MAINPID
+KillMode=process
+TimeoutSec=30
+Restart=no
+[Install]
+WantedBy=multi-user.target
+
+
+Удаляем все из PGDATA  на всех трех узлах
+
+Стартуем сервис патрони
+
+В лидере выполняем скрипт
+create user backup;
+ALTER ROLE backup NOSUPERUSER;
+ALTER USER backup WITH PASSWORD '123456' ;
+ ALTER ROLE backup WITH REPLICATION;
+ALTER ROLE backup WITH REPLICATION;
+GRANT USAGE ON SCHEMA pg_catalog TO backup;
+GRANT EXECUTE ON FUNCTION pg_catalog.current_setting(text) TO backup;
+GRANT EXECUTE ON FUNCTION pg_catalog.pg_is_in_recovery() TO backup;
+GRANT EXECUTE ON FUNCTION pg_catalog.pg_start_backup(text, boolean, boolean) TO backup;
+GRANT EXECUTE ON FUNCTION pg_catalog.pg_stop_backup(boolean, boolean) TO backup;
+GRANT EXECUTE ON FUNCTION pg_catalog.pg_create_restore_point(text) TO backup;
+GRANT EXECUTE ON FUNCTION pg_catalog.pg_switch_wal() TO backup;
+GRANT EXECUTE ON FUNCTION pg_catalog.pg_last_wal_replay_lsn() TO backup;
+GRANT EXECUTE ON FUNCTION pg_catalog.txid_current() TO backup;
+GRANT EXECUTE ON FUNCTION pg_catalog.txid_current_snapshot() TO backup;
+GRANT EXECUTE ON FUNCTION pg_catalog.txid_snapshot_xmax(txid_snapshot) TO backup;
+GRANT EXECUTE ON FUNCTION pg_catalog.pg_control_checkpoint() TO backup;
+
+
+create user pgbouncer;
+ALTER ROLE pgbouncer NOSUPERUSER;
+ALTER USER pgbouncer WITH PASSWORD '123456' ; 
+create user user1;
+ALTER ROLE user1 NOSUPERUSER;
+ALTER USER user1 WITH PASSWORD '123456' ; 
+create user user2;
+ALTER ROLE user2 NOSUPERUSER;
+ALTER USER user2 WITH PASSWORD '123456' ; 
+
+
+
+
+
+  
+ 
