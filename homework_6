@@ -969,6 +969,32 @@ postgres=# select * from employee;
 postgres=# 
 
 
+
+aster@ptr3:~$ patronictl -c /etc/patroni/config.yml list
++--------+-------------+---------+---------+----+-----------+-----------------+
+| Member | Host        | Role    | State   | TL | Lag in MB | Pending restart |
++ Cluster: pg_cluster (7239679942696783049) ----+-----------+-----------------+
+| ptr1   | 10.128.0.22 | Replica | running |  8 |         0 | *               |
+| ptr2   | 10.128.0.18 | Replica | running |  8 |         0 | *               |
+| ptr3   | 10.128.0.12 | Leader  | running |  8 |           |                 |
++--------+-------------+---------+---------+----+-----------+-----------------+
+
+aster@ptr3:~$ sudo systemctl stop patroni; sleep 5; sudo systemctl start patroni;
+
+aster@ptr3:~$ patronictl -c /etc/patroni/config.yml list
++--------+-------------+---------+---------+----+-----------+-----------------+
+| Member | Host        | Role    | State   | TL | Lag in MB | Pending restart |
++ Cluster: pg_cluster (7239679942696783049) ----+-----------+-----------------+
+| ptr1   | 10.128.0.22 | Leader  | running |  9 |           | *               |
+| ptr2   | 10.128.0.18 | Replica | running |  9 |         0 | *               |
+| ptr3   | 10.128.0.12 | Replica | running |  9 |         0 |                 |
++--------+-------------+---------+---------+----+-----------+-----------------+
+aster@ptr3:~$ 
+
+
+
+
+
 aster@ptr2:~$ sudo su - postgres
 [sudo] password for aster: 
 postgres@ptr2:~$ psql
