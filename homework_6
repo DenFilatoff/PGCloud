@@ -98,6 +98,34 @@ yc compute instance create --name ptr3 --description "ptr3" --hostname ptr3 --co
 собственно постгрес (14)
 sudo apt install postgresql
 
+
+правим  /var/lib/postgresql/14/main/pg_hba.conf на трех узлах
+
+# TYPE  DATABASE        USER            ADDRESS                 METHOD
+
+# "local" is for Unix domain socket connections only
+local   all             all                                     trust
+# IPv4 local connections:
+host    all             all             127.0.0.1/32            trust
+# IPv6 local connections:
+host    all             all             ::1/128                 trust
+# Allow replication connections from localhost, by a user with the
+# replication privilege.
+local   replication     all                                     trust
+host    replication     all             127.0.0.1/32            trust
+host    replication     all             ::1/128                 trust
+host    postgres     all             127.0.0.1/32            trust
+host    postgres     all        10.128.0.11/0 trust
+
+
+host replication replicator 127.0.0.1/32 trust
+host replication replicator 10.128.0.22/0 trust
+host replication replicator 10.128.0.18/0 trust
+host replication replicator 10.128.0.12/0 trust
+host all all 0.0.0.0/0  trust
+                                                      
+
+
 Питон
 sudo apt install python3-pip
  Патрони
@@ -342,6 +370,16 @@ WantedBy=multi-user.target
 
 Стартуем сервис патрони
 
+aster@ptr2:~$ patronictl -c /etc/patroni/config.yml list
++--------+-------------+---------+---------+----+-----------+-----------------+
+| Member | Host        | Role    | State   | TL | Lag in MB | Pending restart |
++ Cluster: pg_cluster (7239679942696783049) ----+-----------+-----------------+
+| ptr1   | 10.128.0.22 | Replica | running |  1 |         0 | *               |
+| ptr2   | 10.128.0.18 | Replica | running |  1 |         0 | *               |
+| ptr3   | 10.128.0.12 | Leader  | running |  1 |           |                 |
++--------+-------------+---------+---------+----+-----------+-----------------+
+ кластер собрался
+ 
 В лидере выполняем скрипт
 create user backup;
 ALTER ROLE backup NOSUPERUSER;
@@ -373,8 +411,579 @@ ALTER ROLE user2 NOSUPERUSER;
 ALTER USER user2 WITH PASSWORD '123456' ; 
 
 
+Настройка pgbouncer
 
 
 
-  
+psql -Atq -h ptr1 -p 5432 -U postgres -d postgres -c "SELECT concat('\"', usename, '\" \"', passwd, '\"') FROM pg_shadow" >> /etc/pgbouncer/userlist.txt
+
+
+psql -Atq -h ptr2 -p 5432 -U postgres -d postgres -c "SELECT concat('\"', usename, '\" \"', passwd, '\"') FROM pg_shadow" >> /etc/pgbouncer/userlist.txt
+
+
+psql -Atq -h ptr3 -p 5432 -U postgres -d postgres -c "SELECT concat('\"', usename, '\" \"', passwd, '\"') FROM pg_shadow" >> /etc/pgbouncer/userlist.txt
+
+
+create user pgbouncer;
+ALTER ROLE pgbouncer NOSUPERUSER;
+ALTER USER pgbouncer WITH PASSWORD '123456' ; 
+create user user1;
+ALTER ROLE user1 NOSUPERUSER;
+ALTER USER user1 WITH PASSWORD '123456' ; 
+create user user2;
+ALTER ROLE user2 NOSUPERUSER;
+ALTER USER user2 WITH PASSWORD '123456' ; 
+
+
+sudo cat /etc/pgbouncer/pgbouncer.ini
+;;;
+;;; PgBouncer configuration file
+;;;
+
+;; database name = connect string
+;;
+;; connect string params:
+;;   dbname= host= port= user= password= auth_user=
+;;   client_encoding= datestyle= timezone=
+;;   pool_size= reserve_pool= max_db_connections=
+;;   pool_mode= connect_query= application_name=
+[databases]
+* = host=10.128.0.18 port=5432 dbname=postgres
+* = host=10.128.0.18 port=5432 dbname=testdb
+
+;; foodb over Unix socket
+;foodb =
+
+;; redirect bardb to bazdb on localhost
+;bardb = host=localhost dbname=bazdb
+
+;; access to dest database will go with single user
+;forcedb = host=localhost port=300 user=baz password=foo client_encoding=UNICODE datestyle=ISO connect_query='SELECT 1'
+
+;; use custom pool sizes
+;nondefaultdb = pool_size=50 reserve_pool=10
+
+;; use auth_user with auth_query if user not present in auth_file
+;; auth_user must exist in auth_file
+; foodb = auth_user=bar
+
+;; fallback connect string
+;* = host=testserver
+
+;; User-specific configuration
+[users]
+
+;user1 = pool_mode=transaction max_user_connections=10
+
+;; Configuration section
+[pgbouncer]
+
+;;;
+;;; Administrative settings
+;;;
+
+logfile = /var/log/postgresql/pgbouncer.log
+pidfile = /var/run/postgresql/pgbouncer.pid
+
+;;;
+;;; Where to wait for clients
+;;;
+
+;; IP address or * which means all IPs
+listen_addr = *
+listen_port = 6432
+
+;; Unix socket is also used for -R.
+;; On Debian it should be /var/run/postgresql
+;unix_socket_dir = /tmp
+;unix_socket_mode = 0777
+;unix_socket_group =
+unix_socket_dir = /var/run/postgresql
+
+;;;
+;;; TLS settings for accepting clients
+;;;
+
+;; disable, allow, require, verify-ca, verify-full
+;client_tls_sslmode = disable
+
+;; Path to file that contains trusted CA certs
+;client_tls_ca_file = <system default>
+
+;; Private key and cert to present to clients.
+;; Required for accepting TLS connections from clients.
+;client_tls_key_file =
+;client_tls_cert_file =
+
+;; fast, normal, secure, legacy, <ciphersuite string>
+;client_tls_ciphers = fast
+
+;; all, secure, tlsv1.0, tlsv1.1, tlsv1.2, tlsv1.3
+;client_tls_protocols = secure
+
+;; none, auto, legacy
+;client_tls_dheparams = auto
+
+;; none, auto, <curve name>
+;client_tls_ecdhcurve = auto
+
+;;;
+;;; TLS settings for connecting to backend databases
+;;;
+
+;; disable, allow, require, verify-ca, verify-full
+;server_tls_sslmode = disable
+
+;; Path to that contains trusted CA certs
+;server_tls_ca_file = <system default>
+
+;; Private key and cert to present to backend.
+;; Needed only if backend server require client cert.
+;server_tls_key_file =
+;server_tls_cert_file =
+
+;; all, secure, tlsv1.0, tlsv1.1, tlsv1.2, tlsv1.3
+;server_tls_protocols = secure
+
+;; fast, normal, secure, legacy, <ciphersuite string>
+;server_tls_ciphers = fast
+
+;;;
+;;; Authentication settings
+;;;
+
+;; any, trust, plain, md5, cert, hba, pam
+auth_type = trust
+auth_file = /etc/pgbouncer/userlist.txt
+
+;; Path to HBA-style auth config
+;auth_hba_file =
+
+;; Query to use to fetch password from database.  Result
+;; must have 2 columns - username and password hash.
+;auth_query = SELECT usename, passwd FROM pg_shadow WHERE usename=$1
+
+;;;
+;;; Users allowed into database 'pgbouncer'
+;;;
+
+;; comma-separated list of users who are allowed to change settings
+;admin_users = user2, someadmin, otheradmin
+
+;; comma-separated list of users who are just allowed to use SHOW command
+;stats_users = stats, root
+
+;;;
+;;; Pooler personality questions
+;;;
+
+;; When server connection is released back to pool:
+;;   session      - after client disconnects (default)
+;;   transaction  - after transaction finishes
+;;   statement    - after statement finishes
+;pool_mode = session
+
+;; Query for cleaning connection immediately after releasing from
+;; client.  No need to put ROLLBACK here, pgbouncer does not reuse
+;; connections where transaction is left open.
+;server_reset_query = DISCARD ALL
+
+;; Whether server_reset_query should run in all pooling modes.  If it
+;; is off, server_reset_query is used only for session-pooling.
+;server_reset_query_always = 0
+
+;; Comma-separated list of parameters to ignore when given in startup
+;; packet.  Newer JDBC versions require the extra_float_digits here.
+;ignore_startup_parameters = extra_float_digits
+
+;; When taking idle server into use, this query is run first.
+;server_check_query = select 1
+
+;; If server was used more recently that this many seconds ago,
+; skip the check query.  Value 0 may or may not run in immediately.
+;server_check_delay = 30
+
+;; Close servers in session pooling mode after a RECONNECT, RELOAD,
+;; etc. when they are idle instead of at the end of the session.
+;server_fast_close = 0
+
+;; Use <appname - host> as application_name on server.
+;application_name_add_host = 0
+
+;; Period for updating aggregated stats.
+;stats_period = 60
+
+;;;
+;;; Connection limits
+;;;
+
+;; Total number of clients that can connect
+max_client_conn = 100
+
+;; Default pool size.  20 is good number when transaction pooling
+;; is in use, in session pooling it needs to be the number of
+;; max clients you want to handle at any moment
+default_pool_size = 20
+
+;; Minimum number of server connections to keep in pool.
+min_pool_size = 5
+
+; how many additional connection to allow in case of trouble
+reserve_pool_size = 5 
+
+;; If a clients needs to wait more than this many seconds, use reserve
+;; pool.
+reserve_pool_timeout = 5
+
+;; Maximum number of server connections for a database
+max_db_connections = 500
+
+;; Maximum number of server connections for a user
+max_user_connections = 250
+
+;; If off, then server connections are reused in LIFO manner
+server_round_robin = 1
+
+;;;
+;;; Logging
+;;;
+
+;; Syslog settings
+;syslog = 0
+;syslog_facility = daemon
+;syslog_ident = pgbouncer
+
+;; log if client connects or server connection is made
+;log_connections = 1
+
+;; log if and why connection was closed
+;log_disconnections = 1
+
+;; log error messages pooler sends to clients
+;log_pooler_errors = 1
+
+;; write aggregated stats into log
+;log_stats = 1
+
+;; Logging verbosity.  Same as -v switch on command line.
+;verbose = 0
+
+;;;
+;;; Timeouts
+;;;
+
+;; Close server connection if its been connected longer.
+;server_lifetime = 3600
+
+;; Close server connection if its not been used in this time.  Allows
+;; to clean unnecessary connections from pool after peak.
+;server_idle_timeout = 600
+
+;; Cancel connection attempt if server does not answer takes longer.
+;server_connect_timeout = 15
+
+;; If server login failed (server_connect_timeout or auth failure)
+;; then wait this many second.
+;server_login_retry = 15
+
+;; Dangerous.  Server connection is closed if query does not return in
+;; this time.  Should be used to survive network problems, _not_ as
+;; statement_timeout. (default: 0)
+;query_timeout = 0
+
+;; Dangerous.  Client connection is closed if the query is not
+;; assigned to a server in this time.  Should be used to limit the
+;; number of queued queries in case of a database or network
+;; failure. (default: 120)
+;query_wait_timeout = 120
+
+;; Dangerous.  Client connection is closed if no activity in this
+;; time.  Should be used to survive network problems. (default: 0)
+;client_idle_timeout = 0
+
+;; Disconnect clients who have not managed to log in after connecting
+;; in this many seconds.
+;client_login_timeout = 60
+
+;; Clean automatically created database entries (via "*") if they stay
+;; unused in this many seconds.
+; autodb_idle_timeout = 3600
+
+;; Close connections which are in "IDLE in transaction" state longer
+;; than this many seconds.
+;idle_transaction_timeout = 0
+
+;; How long SUSPEND/-R waits for buffer flush before closing
+;; connection.
+;suspend_timeout = 10
+
+;;;
+;;; Low-level tuning options
+;;;
+
+;; buffer for streaming packets
+;pkt_buf = 4096
+
+;; man 2 listen
+;listen_backlog = 128
+
+;; Max number pkt_buf to process in one event loop.
+;sbuf_loopcnt = 5
+
+;; Maximum PostgreSQL protocol packet size.
+;max_packet_size = 2147483647
+
+;; Set SO_REUSEPORT socket option
+;so_reuseport = 0
+
+;; networking options, for info: man 7 tcp
+
+;; Linux: Notify program about new connection only if there is also
+;; data received.  (Seconds to wait.)  On Linux the default is 45, on
+;; other OS'es 0.
+;tcp_defer_accept = 0
+
+;; In-kernel buffer size (Linux default: 4096)
+;tcp_socket_buffer = 0
+
+;; whether tcp keepalive should be turned on (0/1)
+;tcp_keepalive = 1
+
+;; The following options are Linux-specific.  They also require
+;; tcp_keepalive=1.
+
+;; Count of keepalive packets
+;tcp_keepcnt = 0
+
+;; How long the connection can be idle before sending keepalive
+;; packets
+;tcp_keepidle = 0
+
+;; The time between individual keepalive probes
+;tcp_keepintvl = 0
+
+;; How long may transmitted data remain unacknowledged before TCP
+;; connection is closed (in milliseconds)
+;tcp_user_timeout = 0
+
+;; DNS lookup caching time
+;dns_max_ttl = 15
+
+;; DNS zone SOA lookup period
+;dns_zone_check_period = 0
+
+;; DNS negative result caching time
+;dns_nxdomain_ttl = 15
+
+;; Custom resolv.conf file, to set custom DNS servers or other options
+;; (default: empty = use OS settings)
+;resolv_conf = /etc/pgbouncer/resolv.conf
+
+;;;
+;;; Random stuff
+;;;
+
+;; Hackish security feature.  Helps against SQL injection: when PQexec
+;; is disabled, multi-statement cannot be made.
+;disable_pqexec = 0
+
+;; Config file to use for next RELOAD/SIGHUP
+;; By default contains config file from command line.
+;conffile
+
+;; Windows service name to register as.  job_name is alias for
+;; service_name, used by some Skytools scripts.
+;service_name = pgbouncer
+;job_name = pgbouncer
+
+;; Read additional config from other file
+;%include /etc/pgbouncer/pgbouncer-other.ini
+
+В /etc/sysctl.conf
+net.ipv4.ip_nonlocal_bind = 1
+net.ipv4.ip_forward = 1
+
+sysctl -p
+
+
+HAproxy 
+
+yc compute instance create --name hp1 --description "hp1" --hostname hp1 --cores 2 --memory 2  \
+--create-boot-disk name=hp1-osdisk,image-folder-id=standard-images,image-family=ubuntu-2204-lts \ 
+--network-interface subnet-name=default-ru-central1-a,nat-ip-version=ipv4 --ssh-key /home/aster/.ssh/id_rsa.pub --async
+ставим haproxy и keepalived
+
+     sudo apt-get install haproxy
+ sudo apt-get install -y keepalived
+
+конфиги 
+[Unit]
+Description=HAProxy Load Balancer
+# allows us to do millisecond level restarts without triggering alert in Systemd
+#StartLimitInterval=0
+#StartLimitBurst=0
+After=network.target syslog.service
+Wants=syslog.service
+
+/etc/systemd/system/haproxy.service
+[Service]
+Environment="CONFIG=/etc/haproxy/haproxy.cfg" "PIDFILE=/run/haproxy.pid"
+# EXTRAOPTS and RELOADOPS come from this default file
+# EnvironmentFile=-/etc/default/haproxy
+ExecStartPre=/usr/sbin/haproxy -f $CONFIG -c -q
+ExecStart=/usr/sbin/haproxy -W -f $CONFIG -p $PIDFILE $EXTRAOPTS
+ExecReload=/usr/sbin/haproxy -f $CONFIG -c -q $EXTRAOPTS $RELOADOPTS
+ExecReload=/bin/kill -USR2 $MAINPID
+KillMode=mixed
+#Restart=always
+#Type=forking
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+tc/systemd/system/haproxy.service
+
+sudo ip addr add 10.128.0.11/24 broadcast  10.128.0.225 dev ens8
+ lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+    inet6 ::1/128 scope host 
+       valid_lft forever preferred_lft forever
+2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state UP group default qlen 1000
+    link/ether d0:0d:1e:c8:fc:66 brd ff:ff:ff:ff:ff:ff
+    altname enp138s0
+    altname ens8
+    inet 10.128.0.39/24 metric 100 brd 10.128.0.255 scope global eth0
+       valid_lft forever preferred_lft forever
+    inet 10.128.0.39/32 scope global eth0
+       valid_lft forever preferred_lft forever
+    inet 10.128.0.11/24 brd 10.128.0.225 scope global secondary eth0
+       valid_lft forever preferred_lft forever
+    inet6 fe80::d20d:1eff:fec8:fc66/64 scope link 
+       valid_lft forever preferred_lft forever
+
+
+
+/etc/keepalived/keepalived.conf
+
+
+global_defs {
+}
+vrrp_script chk_haproxy { # Requires keepalived-1.1.13
+    script "/usr/bin/killall -0 haproxy" # widely used idiom
+    interval 2 # check every 2 seconds
+    weight 2 # add 2 points of prio if OK
+}
+vrrp_instance VI_1 {
+    interface eth0
+    state MASTER # or "BACKUP" on backup
+    priority 101 # 101 on master, 100 on backup
+    virtual_router_id 51
+    authentication {
+        auth_type PASS
+        auth_pass 1234
+    }
+    virtual_ipaddress {
+       10.128.0.11
+    }
+    track_script {
+        chk_haproxy
+    }
+}
+
+
+Стартуем сервисы
+ sudo systemctl start keepalived
+     sudo systemctl start haproxy.service
+
+
  
+ Проверяем сервис через HAproxy
+ 
+ 
+Last login: Fri Jun  2 23:17:52 2023 from 194.8.47.227
+aster@pg-client:~$ psql -h 10.128.0.11 -p 5000 -U postgres
+psql (14.8 (Ubuntu 14.8-0ubuntu0.22.04.1))
+Type "help" for help.
+
+postgres=# select pg_is_in_recovery();
+ pg_is_in_recovery 
+-------------------
+ f
+(1 row)
+
+postgres=# \q
+aster@pg-client:~$ psql -h 10.128.0.11 -p 5001 -U postgres
+psql (14.8 (Ubuntu 14.8-0ubuntu0.22.04.1))
+Type "help" for help.
+
+postgres=# select pg_is_in_recovery();
+ pg_is_in_recovery 
+-------------------
+ t
+(1 row)
+
+postgres=# 
+
+
+Бэкап 
+aster@ptr3:~$ sudo su - postgres
+postgres@ptr3:~$ pg_basebackup -h localhost -p 5432 -U postgres -D /backup -Ft -z -Xs -P
+Password: 
+26358/26358 kB (100%), 1/1 tablespace
+postgres@ptr3:~$ ls -la /backup
+total 3496
+drwxr-xr-x  2 postgres postgres    4096 Jun  5 11:44 .
+drwxr-xr-x 20 root     root        4096 Jun  5 11:42 ..
+-rw-------  1 postgres postgres  139399 Jun  5 11:44 backup_manifest
+-rw-------  1 postgres postgres 3404129 Jun  5 11:44 base.tar.gz
+-rw-------  1 postgres postgres   18347 Jun  5 11:44 pg_wal.tar.gz
+postgres@ptr3:~$ packet_write_wait: Connection to 158.160.38.146 port 22: Broken pipe
+[aster@cobra ~]$ 
+
+к сожалению не удалось забэкапить с помощью wal-g
+ни с MinIO 
+ sudo su - postgres
+[sudo] password for aster: 
+postgres@ptr1:~$ /snap/bin/wal-g backup-list
+INFO: 2023/06/04 23:52:06.302749 No backups found
+postgres@ptr1:~$ /snap/bin/wal-g backup-push /var/lib/postgresql/14/main
+ERROR: 2023/06/04 23:52:14.803295 failed to list s3 folder: 'data/disk1/minio/basebackups_005/': InvalidAccessKeyId: The Access Key Id you provided does not exist in our records.
+	status code: 403, request id: 176599CB7E05B877, host id: dd9025bab4ad464b049177c95eb6ebf374d3b3fd1af9251148b658df7ac2e3e8
+postgres@ptr1:~$ /snap/bin/wal-g backup-list
+INFO: 2023/06/04 23:53:05.700336 No backups found
+postgres@ptr1:~$ /snap/bin/wal-g backup-push /var/lib/postgresql/14/main
+ERROR: 2023/06/04 23:53:09.999594 failed to list s3 folder: 'data/disk1/minio/basebackups_005/': InvalidAccessKeyId: The Access Key Id you provided does not exist in our records.
+	status code: 403, request id: 176599D8584EDAC4, host id: dd9025bab4ad464b049177c95eb6ebf374d3b3fd1af9251148b658df7ac2e3e8
+postgres@ptr1:~$ wal-g wal-push /var/lib/postgresql/14/main
+ERROR: 2023/06/04 23:54:27.003075 Error of parallel upload: open /var/lib/postgresql/14/archive_status: no such file or directory
+ERROR: 2023/06/04 23:54:27.073268 failed to upload 'data/disk1/minio/wal_005/main.br' to bucket 'mnt': ReadRequestBody: read upload data failed
+caused by: CompressAndEncrypt: compression failed
+INFO: 2023/06/04 23:54:27.073327 FILE PATH: main.br
+ERROR: 2023/06/04 23:54:27.073348 upload: could not Upload '/var/lib/postgresql/14/main'
+: failed to upload 'data/disk1/minio/wal_005/main.br' to bucket 'mnt': ReadRequestBody: read upload data failed
+caused by: CompressAndEncrypt: compression failed
+postgres@ptr1:~$  wal-g backup-push 
+Error: accepts 1 arg(s), received 0
+
+
+ ни с Yandexstorage
+ 
+ ster@ptr1:~$ sudo su - postgres
+[sudo] password for aster: 
+postgres@ptr1:~$ AWS_ENDPOINT=https://storage.yandexcloud.net AWS_ACCEES_KEY_ID=YCAJEM13RjzqF2gWWp_YFHev7 AWS_SECRET_ACCESS_KEY=YCPWXmTFyYGDiq3QOXgZ6UJ-hMSLcfre-HJM99Dx WALG_S3_PREFIX=s3://waltest wal-g backup-push /var/lib/postgresql/14/main^C
+postgres@ptr1:~$  AWS_ENDPOINT=https://storage.yandexcloud.net AWS_ACCEES_KEY_ID=YCAJEEm7SKbaEPx9AMOvLIPle AWS_SECRET_ACCESS_KEY=YCMjnmr0D-MOIahjrWkGuayDn9n4LvTgHoobEc27 WALG_S3_PREFIX=s3://waltest wal-g backup-push /var/lib/postgresql/14/main
+ERROR: 2023/06/05 10:05:03.280676 failed to list s3 folder: 'basebackups_005/': SignatureDoesNotMatch: The request signature we calculated does not match the signature you provided. Check your key and signing method.
+	status code: 403, request id: 555d9e654e34539e, host id: 
+postgres@ptr1:~$ AWS_ENDPOINT=https://storage.yandexcloud.net AWS_ACCEES_KEY_ID=ajegvkrn0pp0jkb5qrgt AWS_SECRET_ACCESS_KEY=YCMjnmr0D-MOIahjrWkGuayDn9n4LvTgHoobEc27 WALG_S3_PREFIX=s3://waltest wal-g backup-push /var/lib/postgresql/14/main
+ERROR: 2023/06/05 10:05:46.778660 failed to list s3 folder: 'basebackups_005/': SignatureDoesNotMatch: The request signature we calculated does not match the signature you provided. Check your key and signing method.
+	status code: 403, request id: 91deba71f372da97, host id: 
+postgres@ptr1:~$ packet_write_wait: Connection to 158.160.42.116 port 22: Broken pipe
+^[[A^[[A^C
+[aster@cobra ~]$ ^C
+[aster@cobra ~]$ ssh aster@158.160.42.116
+
+
+
