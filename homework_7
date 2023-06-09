@@ -1,1 +1,144 @@
 Postgres in minicube
+
+Создание ВМ
+
+yc compute instance create --name pg-cube --description "pg_cube" --hostname pg-cube \
+--cores 2 --memory 2 --create-boot-disk name=pg-cube-osdisk,image-folder-id=standard-images,image-family=ubuntu-2204-lts \
+--network-interface subnet-name=default-ru-central1-a,nat-ip-version=ipv4 --ssh-key /home/aster/.ssh/id_rsa.pub --async
+
+
+Установка доп рерозитария докера
+
+ sudo apt-get update
+ sudo apt-get install ca-certificates curl gnupg
+ sudo install -m 0755 -d /etc/apt/keyrings
+ curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+ sudo chmod a+r /etc/apt/keyrings/docker.gpg
+ echo \
+  "deb [arch="$(dpkg --print-architecture)" signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+  "$(. /etc/os-release && echo "$VERSION_CODENAME")" stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+ sudo apt-get update
+ sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+Проверка  Docker Engine 
+ sudo docker run hello-world
+
+Установка cubectl 
+sudo apt update
+sudo apt install curl
+curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+kubectl version --client
+
+Установка minicube
+curl -LO https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64
+sudo install minikube-linux-amd64 /usr/local/bin/minikube
+
+старт  миникуба
+aster@pg-cube:~$ minikube start --driver=docker
+😄  minikube v1.30.1 on Ubuntu 22.04 (vbox/amd64)
+✨  Using the docker driver based on user configuration
+
+🤷  Exiting due to PROVIDER_DOCKER_NOT_FOUND: The 'docker' provider was not found: exec: "docker": executable file not found in $PATH
+💡  Suggestion: Install Docker
+📘  Documentation: https://minikube.sigs.k8s.io/docs/drivers/docker/
+
+
+aster@pg-cube:~$ vi postgres-configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-config
+  labels:
+    app: postgres
+data:
+  POSTGRES_DB: postgresdb
+  POSTGRES_USER: admin
+  POSTGRES_PASSWORD: test123
+
+
+
+
+
+aster@pg-cube:~$ kubectl apply -f postgres-configmap.yaml
+configmap/postgres-config created
+aster@pg-cube:~$ vi postgres-storage.yaml
+kind: PersistentVolume
+apiVersion: v1
+metadata:
+  name: postgres-pv-volume
+  labels:
+    type: local
+    app: postgres
+spec:
+  storageClassName: manual
+  capacity:
+    storage: 5Gi
+  accessModes:
+    - ReadWriteMany
+  hostPath:
+    path: "/mnt/data"
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: postgres-pv-claim
+  labels:
+    app: postgres
+spec:
+  storageClassName: manual
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 5Gi
+
+
+
+aster@pg-cube:~$ kubectl apply -f postgres-storage.yaml
+persistentvolume/postgres-pv-volume created
+persistentvolumeclaim/postgres-pv-claim created
+aster@pg-cube:~$ kubectl get pvc
+NAME                STATUS   VOLUME               CAPACITY   ACCESS MODES   STORAGECLASS   AGE
+postgres-pv-claim   Bound    postgres-pv-volume   5Gi        RWX            manual         33s
+aster@pg-cube:~$ vi postgres-deployment.yaml
+aster@pg-cube:~$ kubectl apply -f postgres-deployment.yaml
+deployment.apps/postgres created
+aster@pg-cube:~$ vi  postgres-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels:
+    app: postgres
+spec:
+  type: NodePort
+  ports:
+   - port: 5432
+  selector:
+   app: postgres
+
+
+aster@pg-cube:~$ kubectl apply -f postgres-service.yaml
+service/postgres created
+aster@pg-cube:~$ kubectl get all
+NAME                           READY   STATUS              RESTARTS   AGE
+pod/postgres-7454f995b-5zrcb   0/1     ContainerCreating   0          79s
+
+NAME                 TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)          AGE
+service/kubernetes   ClusterIP   10.96.0.1       <none>        443/TCP          10m
+service/postgres     NodePort    10.109.156.98   <none>        5432:31881/TCP   16s
+
+NAME                       READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/postgres   0/1     1            0           80s
+
+NAME                                 DESIRED   CURRENT   READY   AGE
+replicaset.apps/postgres-7454f995b   1         1         0       79s
+aster@pg-cube:~$ kubectl exec -it  postgres-7454f995b-5zrcb --  psql -h localhost -U admin --password -p 5432 postgresdb
+Password for user admin: 
+psql (10.1)
+Type "help" for help.
+
+
+
